@@ -45,7 +45,7 @@ Key files and directories:
 From a fresh clone:
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/PaulS97/customer-support-agent.git
 cd novig_takehome
 ```
 
