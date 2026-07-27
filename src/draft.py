@@ -5,16 +5,22 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from llm import call_responses_api, load_prompt
+try:
+    from .config import DRAFT_MODEL
+    from .llm import LLMClient, load_prompt
+except ImportError:
+    from config import DRAFT_MODEL
+    from llm import LLMClient, load_prompt
 
 
 DRAFT_PROMPT_PATH = Path("prompts/draft.md")
 
 
 def generate_draft_response(
-    client: Any,
+    llm_client: LLMClient,
     ticket: dict[str, Any],
     classification: dict[str, Any],
+    model: str = DRAFT_MODEL,
     prompt_path: Path = DRAFT_PROMPT_PATH,
 ) -> str:
     instructions = load_prompt(prompt_path)
@@ -22,4 +28,4 @@ def generate_draft_response(
         "ticket": ticket,
         "classification": classification,
     }
-    return call_responses_api(client, instructions, payload).strip()
+    return llm_client.generate(instructions, payload, model).strip()

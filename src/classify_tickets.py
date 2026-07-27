@@ -8,18 +8,27 @@ from contextlib import redirect_stdout
 from datetime import datetime
 import json
 import logging
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from draft import generate_draft_response
-from llm import call_responses_api, create_openai_client, load_prompt, parse_json_object
+try:
+    from .config import CLASSIFICATION_MODEL
+    from .draft import generate_draft_response
+    from .llm import LLMClient, create_llm_client, load_prompt, parse_json_object
+except ImportError:
+    from config import CLASSIFICATION_MODEL
+    from draft import generate_draft_response
+    from llm import LLMClient, create_llm_client, load_prompt, parse_json_object
 
 
 CLASSIFICATION_PROMPT_PATH = Path("prompts/classification.md")
+CONFIG_PATH = Path(__file__).resolve().with_name("config.py")
 DEFAULT_RESULTS_ROOT = Path("results")
 CATEGORY_OUTPUT_FILENAME = "category_output.jsonl"
 EVAL_OUTPUT_FILENAME = "eval_output.txt"
+CONFIG_SNAPSHOT_FILENAME = "config.py"
 TICKET_INPUT_FIELDS = ("ticket_id", "subject", "body", "metadata")
 REQUIRED_FIELDS = {
     "ticket_id",
@@ -107,6 +116,12 @@ def create_run_directory(results_root: Path) -> Path:
     return run_dir
 
 
+def copy_config_snapshot(run_dir: Path, config_path: Path = CONFIG_PATH) -> Path:
+    destination = run_dir / CONFIG_SNAPSHOT_FILENAME
+    shutil.copy2(config_path, destination)
+    return destination
+
+
 def validate_prediction(prediction: dict[str, Any]) -> dict[str, Any]:
     missing_fields = REQUIRED_FIELDS - set(prediction)
     if missing_fields:
@@ -125,9 +140,14 @@ def prepare_ticket_for_model(ticket: dict[str, Any]) -> dict[str, Any]:
     return {field: ticket[field] for field in TICKET_INPUT_FIELDS}
 
 
-def classify_ticket(client: Any, instructions: str, ticket: dict[str, Any]) -> dict[str, Any]:
+def classify_ticket(
+    llm_client: LLMClient,
+    instructions: str,
+    ticket: dict[str, Any],
+    model: str = CLASSIFICATION_MODEL,
+) -> dict[str, Any]:
     model_input = prepare_ticket_for_model(ticket)
-    response_text = call_responses_api(client, instructions, model_input, RESPONSE_FORMAT)
+    response_text = llm_client.generate(instructions, model_input, model, RESPONSE_FORMAT)
     prediction = parse_json_object(response_text)
     return validate_prediction(prediction)
 
@@ -148,14 +168,19 @@ def fallback_prediction(ticket: dict[str, Any], reason: str) -> dict[str, Any]:
     }
 
 
-def process_ticket(client: Any, classification_instructions: str, ticket: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    prediction = classify_ticket(client, classification_instructions, ticket)
+def process_ticket(
+    llm_client: LLMClient,
+    classification_instructions: str,
+    ticket: dict[str, Any],
+    classification_model: str = CLASSIFICATION_MODEL,
+) -> tuple[dict[str, Any], bool]:
+    prediction = classify_ticket(llm_client, classification_instructions, ticket, classification_model)
     draft_failed = False
 
     if prediction.get("should_draft") is True:
         try:
             model_ticket = prepare_ticket_for_model(ticket)
-            prediction["draft_response"] = generate_draft_response(client, model_ticket, prediction)
+            prediction["draft_response"] = generate_draft_response(llm_client, model_ticket, prediction)
         except Exception:
             draft_failed = True
             prediction["draft_response"] = None
@@ -166,7 +191,7 @@ def process_ticket(client: Any, classification_instructions: str, ticket: dict[s
 
 def run_pipeline(input_path: Path, output_path: Path, prompt_path: Path) -> tuple[int, int, int, int]:
     classification_instructions = load_prompt(prompt_path)
-    client = create_openai_client()
+    llm_client = create_llm_client()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("", encoding="utf-8")
@@ -182,7 +207,7 @@ def run_pipeline(input_path: Path, output_path: Path, prompt_path: Path) -> tupl
         print(f"Processing ticket {total}: {ticket_id}", flush=True)
 
         try:
-            prediction, ticket_draft_failed = process_ticket(client, classification_instructions, ticket)
+            prediction, ticket_draft_failed = process_ticket(llm_client, classification_instructions, ticket)
             successful += 1
             draft_failed += int(ticket_draft_failed)
         except Exception as exc:
@@ -196,7 +221,10 @@ def run_pipeline(input_path: Path, output_path: Path, prompt_path: Path) -> tupl
 
 
 def write_eval_report(ground_truth_path: Path, predictions_path: Path, eval_output_path: Path) -> None:
-    import evaluate_predictions
+    try:
+        from . import evaluate_predictions
+    except ImportError:
+        import evaluate_predictions
 
     ground_truth_records = evaluate_predictions.read_jsonl(ground_truth_path)
     prediction_records = evaluate_predictions.read_jsonl(predictions_path)
@@ -208,7 +236,7 @@ def write_eval_report(ground_truth_path: Path, predictions_path: Path, eval_outp
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Classify support tickets from a JSONL file using the OpenAI Responses API."
+        description="Classify and draft support-ticket responses using the configured LLM providers."
     )
     parser.add_argument("input_path", type=Path, help="Path to the input .jsonl dataset")
     parser.add_argument(
@@ -235,6 +263,8 @@ def main() -> None:
     ground_truth_path = args.ground_truth_path or args.input_path
 
     print(f"Run directory: {run_dir}")
+    config_snapshot_path = copy_config_snapshot(run_dir)
+    print(f"Config snapshot: {config_snapshot_path}")
     print(f"Prediction output: {category_output_path}")
     total, successful, failed, draft_failed = run_pipeline(
         args.input_path,
