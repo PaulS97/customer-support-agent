@@ -9,16 +9,16 @@ from datetime import datetime
 import json
 import logging
 import shutil
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
 try:
-    from .config import CLASSIFICATION_MODEL
+    from .config import CONFIGS
     from .draft import generate_draft_response
     from .llm import LLMClient, create_llm_client, load_prompt, parse_json_object
 except ImportError:
-    from config import CLASSIFICATION_MODEL
+    from config import CONFIGS
     from draft import generate_draft_response
     from llm import LLMClient, create_llm_client, load_prompt, parse_json_object
 
@@ -39,6 +39,30 @@ REQUIRED_FIELDS = {
     "draft_response",
     "confidence",
 }
+
+
+def default_config_name() -> str:
+    return next(iter(CONFIGS))
+
+
+def get_pipeline_config(config_name: str) -> Mapping[str, str]:
+    if config_name not in CONFIGS:
+        available = ", ".join(CONFIGS)
+        raise ValueError(f"Unknown config '{config_name}'. Available configs: {available}")
+
+    config = CONFIGS[config_name]
+    missing_fields = [
+        field
+        for field in ("classification_model", "draft_model")
+        if field not in config
+    ]
+    if missing_fields:
+        missing = ", ".join(missing_fields)
+        raise ValueError(f"Config '{config_name}' is missing required fields: {missing}")
+
+    return config
+
+
 RESPONSE_FORMAT = {
     "format": {
         "type": "json_schema",
@@ -103,13 +127,15 @@ def append_jsonl(path: Path, record: dict[str, Any]) -> None:
         outfile.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def create_run_directory(results_root: Path) -> Path:
+def create_run_directory(results_root: Path, config_name: str) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = results_root / timestamp
+    safe_config_name = "".join(char if char.isalnum() or char in "-_" else "_" for char in config_name)
+    run_name = f"{timestamp}_{safe_config_name}"
+    run_dir = results_root / run_name
     suffix = 1
 
     while run_dir.exists():
-        run_dir = results_root / f"{timestamp}_{suffix}"
+        run_dir = results_root / f"{run_name}_{suffix}"
         suffix += 1
 
     run_dir.mkdir(parents=True)
@@ -144,7 +170,7 @@ def classify_ticket(
     llm_client: LLMClient,
     instructions: str,
     ticket: dict[str, Any],
-    model: str = CLASSIFICATION_MODEL,
+    model: str,
 ) -> dict[str, Any]:
     model_input = prepare_ticket_for_model(ticket)
     response_text = llm_client.generate(instructions, model_input, model, RESPONSE_FORMAT)
@@ -172,15 +198,22 @@ def process_ticket(
     llm_client: LLMClient,
     classification_instructions: str,
     ticket: dict[str, Any],
-    classification_model: str = CLASSIFICATION_MODEL,
+    config: Mapping[str, str],
 ) -> tuple[dict[str, Any], bool]:
+    classification_model = config["classification_model"]
+    draft_model = config["draft_model"]
     prediction = classify_ticket(llm_client, classification_instructions, ticket, classification_model)
     draft_failed = False
 
     if prediction.get("should_draft") is True:
         try:
             model_ticket = prepare_ticket_for_model(ticket)
-            prediction["draft_response"] = generate_draft_response(llm_client, model_ticket, prediction)
+            prediction["draft_response"] = generate_draft_response(
+                llm_client,
+                model_ticket,
+                prediction,
+                draft_model,
+            )
         except Exception:
             draft_failed = True
             prediction["draft_response"] = None
@@ -189,7 +222,12 @@ def process_ticket(
     return prediction, draft_failed
 
 
-def run_pipeline(input_path: Path, output_path: Path, prompt_path: Path) -> tuple[int, int, int, int]:
+def run_pipeline(
+    input_path: Path,
+    output_path: Path,
+    prompt_path: Path,
+    config: Mapping[str, str],
+) -> tuple[int, int, int, int]:
     classification_instructions = load_prompt(prompt_path)
     llm_client = create_llm_client()
 
@@ -207,7 +245,7 @@ def run_pipeline(input_path: Path, output_path: Path, prompt_path: Path) -> tupl
         print(f"Processing ticket {total}: {ticket_id}", flush=True)
 
         try:
-            prediction, ticket_draft_failed = process_ticket(llm_client, classification_instructions, ticket)
+            prediction, ticket_draft_failed = process_ticket(llm_client, classification_instructions, ticket, config)
             successful += 1
             draft_failed += int(ticket_draft_failed)
         except Exception as exc:
@@ -240,6 +278,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("input_path", type=Path, help="Path to the input .jsonl dataset")
     parser.add_argument(
+        "--config",
+        default=default_config_name(),
+        help=f"Named config to run. Available: {', '.join(CONFIGS)}. Defaults to the first config in src/config.py.",
+    )
+    parser.add_argument(
         "--results-root",
         type=Path,
         default=DEFAULT_RESULTS_ROOT,
@@ -257,12 +300,20 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     args = parse_args()
-    run_dir = create_run_directory(args.results_root)
+    try:
+        config = get_pipeline_config(args.config)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    run_dir = create_run_directory(args.results_root, args.config)
     category_output_path = run_dir / CATEGORY_OUTPUT_FILENAME
     eval_output_path = run_dir / EVAL_OUTPUT_FILENAME
     ground_truth_path = args.ground_truth_path or args.input_path
 
     print(f"Run directory: {run_dir}")
+    print(f"Config: {args.config}")
+    print(f"Classification model: {config['classification_model']}")
+    print(f"Draft model: {config['draft_model']}")
     config_snapshot_path = copy_config_snapshot(run_dir)
     print(f"Config snapshot: {config_snapshot_path}")
     print(f"Prediction output: {category_output_path}")
@@ -270,6 +321,7 @@ def main() -> None:
         args.input_path,
         category_output_path,
         CLASSIFICATION_PROMPT_PATH,
+        config,
     )
 
     print("\nSummary")

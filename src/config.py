@@ -1,10 +1,15 @@
-"""Pipeline configuration.
+"""Named pipeline configurations.
 
-Change stage models here without editing the pipeline logic.
+The first entry in CONFIGS is used as the default when --config is omitted.
 """
 
-CLASSIFICATION_MODEL = "claude-sonnet-5"
-DRAFT_MODEL = "claude-sonnet-5"
-
-#CLASSIFICATION_MODEL = "gpt-4.1-mini"
-#DRAFT_MODEL = "gpt-4.1-mini"
+CONFIGS = {
+    "gpt": {
+        "classification_model": "gpt-4.1-mini",
+        "draft_model": "gpt-4.1-mini",
+    },
+    "claude": {
+        "classification_model": "claude-sonnet-5",
+        "draft_model": "claude-sonnet-5",
+    },
+}

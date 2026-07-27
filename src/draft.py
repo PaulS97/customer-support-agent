@@ -6,10 +6,8 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .config import DRAFT_MODEL
     from .llm import LLMClient, load_prompt
 except ImportError:
-    from config import DRAFT_MODEL
     from llm import LLMClient, load_prompt
 
 
@@ -20,7 +18,7 @@ def generate_draft_response(
     llm_client: LLMClient,
     ticket: dict[str, Any],
     classification: dict[str, Any],
-    model: str = DRAFT_MODEL,
+    model: str,
     prompt_path: Path = DRAFT_PROMPT_PATH,
 ) -> str:
     instructions = load_prompt(prompt_path)
