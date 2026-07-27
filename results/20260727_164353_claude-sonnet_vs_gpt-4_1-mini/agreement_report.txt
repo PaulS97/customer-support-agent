@@ -1,0 +1,37 @@
+Agreement report
+First config: claude-sonnet
+Second config: gpt-4.1-mini
+
+ID checks
+Duplicate claude-sonnet ticket IDs: none
+Duplicate gpt-4.1-mini ticket IDs: none
+Missing gpt-4.1-mini ticket IDs: none
+Extra gpt-4.1-mini ticket IDs: none
+
+Agreement metrics
+Compared matched tickets: 15
+Category agreement: 100.00% (15/15)
+Urgency agreement: 60.00% (9/15)
+Should-draft agreement: 100.00% (15/15)
+Draft/no-draft disagreement count: 0
+Tickets with any category, urgency, or should_draft disagreement: 6
+Average confidence for claude-sonnet: 0.855
+Average confidence for gpt-4.1-mini: 0.949
+
+Disagreement ticket IDs
+Category disagreements: none
+Urgency disagreements: 6
+  - t_eval_004
+  - t_eval_009
+  - t_eval_011
+  - t_eval_013
+  - t_eval_014
+  - t_eval_015
+Should-draft disagreements: none
+Any core-field disagreements: 6
+  - t_eval_004
+  - t_eval_009
+  - t_eval_011
+  - t_eval_013
+  - t_eval_014
+  - t_eval_015

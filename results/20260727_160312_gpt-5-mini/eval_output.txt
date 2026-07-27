@@ -1,0 +1,34 @@
+ID checks
+Duplicate ground truth ticket IDs: none
+Duplicate prediction ticket IDs: none
+Missing prediction ticket IDs: none
+Extra prediction ticket IDs: none
+
+Core metrics
+Evaluated matched tickets: 30
+Category accuracy: 100.00% (30/30)
+Urgency accuracy: 73.33% (22/30)
+Should-draft accuracy: 80.00% (24/30)
+
+Urgency confusion matrix
+actual \ predicted      low  medium   high  escalate_immediately
+----------------------------------------------------------------
+low                      10       2      0                     0
+medium                    1       3      2                     0
+high                      0       1      4                     1
+escalate_immediately      1       0      0                     5
+
+False draft on sensitive tickets
+Total sensitive tickets: 9
+False drafts: 0
+False draft rate: 0.00%
+
+False no-draft on draftable tickets
+Total draftable tickets: 21
+False no-drafts: 6
+False no-draft rate: 28.57%
+
+Additional metrics
+Average confidence: 0.885
+Average confidence for correct predictions: 0.896
+Average confidence for incorrect predictions: 0.873
