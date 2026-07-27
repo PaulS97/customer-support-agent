@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate ticket triage predictions against labeled JSONL ground truth."""
+"""Evaluate ticket triage predictions in labeled or agreement mode."""
 
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ def print_verbose_mismatch(
         print(f"Predicted {field}: {predicted_value}")
 
 
-def evaluate(
+def evaluate_labeled(
     ground_truth_records: list[dict[str, Any]],
     prediction_records: list[dict[str, Any]],
     verbose: bool = False,
@@ -254,12 +254,121 @@ def evaluate(
             print_verbose_mismatch(ticket_id, truth, mismatches)
 
 
+def evaluate_agreement(
+    first_prediction_records: list[dict[str, Any]],
+    second_prediction_records: list[dict[str, Any]],
+    first_config_name: str = "first config",
+    second_config_name: str = "second config",
+) -> None:
+    first_by_id, duplicate_first_ids = index_by_ticket_id(first_prediction_records, first_config_name)
+    second_by_id, duplicate_second_ids = index_by_ticket_id(second_prediction_records, second_config_name)
+
+    first_ids = set(first_by_id)
+    second_ids = set(second_by_id)
+    missing_second_ids = first_ids - second_ids
+    extra_second_ids = second_ids - first_ids
+    matched_ids = sorted(first_ids & second_ids)
+
+    category_agreements = 0
+    urgency_agreements = 0
+    should_draft_agreements = 0
+    draft_no_draft_disagreements = 0
+    any_core_disagreement_ids: list[str] = []
+    category_disagreement_ids: list[str] = []
+    urgency_disagreement_ids: list[str] = []
+    should_draft_disagreement_ids: list[str] = []
+    first_confidence_values: list[float] = []
+    second_confidence_values: list[float] = []
+
+    for ticket_id in matched_ids:
+        first = first_by_id[ticket_id]
+        second = second_by_id[ticket_id]
+
+        category_matches = first.get("category") == second.get("category")
+        urgency_matches = first.get("urgency") == second.get("urgency")
+        should_draft_matches = first.get("should_draft") == second.get("should_draft")
+
+        category_agreements += int(category_matches)
+        urgency_agreements += int(urgency_matches)
+        should_draft_agreements += int(should_draft_matches)
+
+        if not category_matches:
+            category_disagreement_ids.append(ticket_id)
+        if not urgency_matches:
+            urgency_disagreement_ids.append(ticket_id)
+        if not should_draft_matches:
+            should_draft_disagreement_ids.append(ticket_id)
+            draft_no_draft_disagreements += int(
+                isinstance(first.get("should_draft"), bool)
+                and isinstance(second.get("should_draft"), bool)
+            )
+        if not (category_matches and urgency_matches and should_draft_matches):
+            any_core_disagreement_ids.append(ticket_id)
+
+        first_confidence = first.get("confidence")
+        if isinstance(first_confidence, int | float):
+            first_confidence_values.append(float(first_confidence))
+
+        second_confidence = second.get("confidence")
+        if isinstance(second_confidence, int | float):
+            second_confidence_values.append(float(second_confidence))
+
+    print("Agreement report")
+    print(f"First config: {first_config_name}")
+    print(f"Second config: {second_config_name}")
+
+    print("\nID checks")
+    print_list_report(f"Duplicate {first_config_name} ticket IDs", duplicate_first_ids)
+    print_list_report(f"Duplicate {second_config_name} ticket IDs", duplicate_second_ids)
+    print_list_report(f"Missing {second_config_name} ticket IDs", missing_second_ids)
+    print_list_report(f"Extra {second_config_name} ticket IDs", extra_second_ids)
+
+    print("\nAgreement metrics")
+    print(f"Compared matched tickets: {len(matched_ids)}")
+    print(
+        f"Category agreement: {format_percent(category_agreements, len(matched_ids))} "
+        f"({category_agreements}/{len(matched_ids)})"
+    )
+    print(
+        f"Urgency agreement: {format_percent(urgency_agreements, len(matched_ids))} "
+        f"({urgency_agreements}/{len(matched_ids)})"
+    )
+    print(
+        f"Should-draft agreement: {format_percent(should_draft_agreements, len(matched_ids))} "
+        f"({should_draft_agreements}/{len(matched_ids)})"
+    )
+    print(f"Draft/no-draft disagreement count: {draft_no_draft_disagreements}")
+    print(f"Tickets with any category, urgency, or should_draft disagreement: {len(any_core_disagreement_ids)}")
+    print(f"Average confidence for {first_config_name}: {format_average(average(first_confidence_values))}")
+    print(f"Average confidence for {second_config_name}: {format_average(average(second_confidence_values))}")
+
+    print("\nDisagreement ticket IDs")
+    print_list_report("Category disagreements", set(category_disagreement_ids))
+    print_list_report("Urgency disagreements", set(urgency_disagreement_ids))
+    print_list_report("Should-draft disagreements", set(should_draft_disagreement_ids))
+    print_list_report("Any core-field disagreements", set(any_core_disagreement_ids))
+
+
+def evaluate(
+    ground_truth_records: list[dict[str, Any]],
+    prediction_records: list[dict[str, Any]],
+    verbose: bool = False,
+) -> None:
+    evaluate_labeled(ground_truth_records, prediction_records, verbose=verbose)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate support-ticket triage predictions against labeled JSONL ground truth."
+        description="Evaluate support-ticket triage predictions in labeled or agreement mode."
     )
-    parser.add_argument("ground_truth_path", type=Path, help="Path to labeled ground truth .jsonl")
-    parser.add_argument("predictions_path", type=Path, help="Path to prediction .jsonl")
+    parser.add_argument(
+        "--mode",
+        choices=("labeled", "agreement"),
+        default="labeled",
+        help="Evaluation mode. Labeled mode reports accuracy; agreement mode compares two prediction files.",
+    )
+    parser.add_argument("first_path", type=Path, help="Ground truth JSONL in labeled mode; first predictions JSONL in agreement mode.")
+    parser.add_argument("second_path", type=Path, help="Predictions JSONL.")
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -270,9 +379,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    ground_truth_records = read_jsonl(args.ground_truth_path)
-    prediction_records = read_jsonl(args.predictions_path)
-    evaluate(ground_truth_records, prediction_records, verbose=args.verbose)
+    first_records = read_jsonl(args.first_path)
+    second_records = read_jsonl(args.second_path)
+    if args.mode == "agreement":
+        evaluate_agreement(first_records, second_records)
+    else:
+        evaluate_labeled(first_records, second_records, verbose=args.verbose)
 
 
 if __name__ == "__main__":
